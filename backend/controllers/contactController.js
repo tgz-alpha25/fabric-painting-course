@@ -1,15 +1,4 @@
-const nodemailer = require('nodemailer');
-
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
-  tls: { rejectUnauthorized: false },
-  connectionTimeout: 15000,
-  greetingTimeout: 15000,
-  socketTimeout: 20000,
-});
+const { sendEmail } = require('../config/mailer');
 
 exports.sendContactEmail = async (req, res) => {
   try {
@@ -19,8 +8,7 @@ exports.sendContactEmail = async (req, res) => {
       return res.status(400).json({ error: 'Name, email and message are required' });
     }
 
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM,
+    await sendEmail({
       to: process.env.ADMIN_EMAIL,
       replyTo: email,
       subject: `Contact Form: ${subject || 'New Message'} - from ${name}`,

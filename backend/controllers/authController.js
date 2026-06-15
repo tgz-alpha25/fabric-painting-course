@@ -2,20 +2,7 @@ const { getDb, getAuth } = require('../config/firebase');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const UAParser = require('ua-parser-js');
-const nodemailer = require('nodemailer');
-
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,         // SSL on port 465
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
-  tls: {
-    rejectUnauthorized: false,
-  },
-  connectionTimeout: 15000,
-  greetingTimeout: 15000,
-  socketTimeout: 20000,
-});
+const { sendEmail } = require('../config/mailer');
 
 const generateToken = (uid, sessionToken, role) => {
   return jwt.sign({ uid, sessionToken, role }, process.env.JWT_SECRET, {
@@ -75,8 +62,7 @@ exports.sendOtp = async (req, res) => {
     });
 
     // Send the email containing the OTP
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM,
+    await sendEmail({
       to: email,
       subject: `${otp} is your verification code - Fabric Painting Course`,
       html: `
@@ -261,8 +247,7 @@ exports.login = async (req, res) => {
       const approveUrl = `${process.env.FRONTEND_URL}/approve-device?token=${approvalToken}&requestId=${requestId}&allow=true`;
       const denyUrl = `${process.env.FRONTEND_URL}/approve-device?token=${approvalToken}&requestId=${requestId}&allow=false`;
 
-      await transporter.sendMail({
-        from: process.env.EMAIL_FROM,
+      await sendEmail({
         to: email,
         subject: 'New Device Login Request - Fabric Painting Course',
         html: `
