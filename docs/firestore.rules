@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: check if user is admin
+    function isAdmin() {
+      return request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Helper: check if user is authenticated
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // USERS: read own, admin reads all
+    match /users/{userId} {
+      allow read: if isAuth() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAdmin();
+      allow update: if isAuth() && request.auth.uid == userId &&
+        request.resource.data.role == resource.data.role; // can't self-promote
+    }
+
+    // COURSE ACCESS: read own, admin manages
+    match /courseAccess/{userId} {
+      allow read: if isAuth() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // WATCH HISTORY: read/write own, admin reads all
+    match /watchHistory/{userId}/{document=**} {
+      allow read, write: if isAuth() && (request.auth.uid == userId || isAdmin());
+    }
+
+    // NOTIFICATIONS: admin only
+    match /notifications/{notifId} {
+      allow read, write: if isAdmin();
+    }
+
+    // CLOUDINARY ACCOUNTS: admin only
+    match /cloudinaryAccounts/{accountId} {
+      allow read, write: if isAdmin();
+    }
+
+    // VIDEOS: authenticated read, admin write
+    match /videos/{videoId} {
+      allow read: if isAuth();
+      allow write: if isAdmin();
+    }
+
+    // LOGIN ATTEMPTS: backend only (via admin SDK)
+    match /loginAttempts/{attemptId} {
+      allow read: if isAdmin();
+      allow write: if false; // backend only
+    }
+
+    // DEVICE APPROVAL REQUESTS: write by backend, read by owner
+    match /deviceApprovalRequests/{requestId} {
+      allow read: if isAuth() &&
+        resource.data.userId == request.auth.uid;
+      allow write: if false; // backend only
+    }
+  }
+}
