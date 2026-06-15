@@ -6,15 +6,15 @@ const nodemailer = require('nodemailer');
 
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 587,
-  secure: false,        // use STARTTLS (not SSL)
+  port: 465,
+  secure: true,         // SSL on port 465
   auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
   tls: {
-    rejectUnauthorized: false,  // allow self-signed certs if needed
+    rejectUnauthorized: false,
   },
-  connectionTimeout: 10000,     // 10 seconds
-  greetingTimeout: 10000,
-  socketTimeout: 15000,
+  connectionTimeout: 15000,
+  greetingTimeout: 15000,
+  socketTimeout: 20000,
 });
 
 const generateToken = (uid, sessionToken, role) => {
