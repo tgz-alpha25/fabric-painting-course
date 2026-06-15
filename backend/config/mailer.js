@@ -1,33 +1,42 @@
-const { Resend } = require('resend');
-
-// Create a shared email sender using Resend API
-// Works on all cloud hosting (Render, Heroku, Railway, etc.)
-// Requires RESEND_API_KEY environment variable
-const resend = new Resend(process.env.RESEND_API_KEY);
-
 /**
- * Send an email using Resend API (no SMTP, no port blocking issues)
+ * Send an email using Brevo HTTP API (no SMTP, no port blocking issues)
  * @param {Object} options - { to, subject, html, replyTo }
  */
 const sendEmail = async ({ to, subject, html, replyTo }) => {
-  const from = process.env.RESEND_FROM_EMAIL || 'Fabric Painting Course <onboarding@resend.dev>';
-  
-  const emailOptions = {
-    from,
-    to,
-    subject,
-    html,
+  const apiKey = process.env.BREVO_API_KEY;
+  const senderEmail = process.env.BREVO_SENDER_EMAIL || 'tgz.github@gmail.com';
+  const senderName = process.env.BREVO_SENDER_NAME || 'Fabric Painting Course';
+
+  if (!apiKey) {
+    throw new Error('BREVO_API_KEY environment variable is not defined.');
+  }
+
+  const payload = {
+    sender: { name: senderName, email: senderEmail },
+    to: [{ email: to }],
+    subject: subject,
+    htmlContent: html,
   };
 
   if (replyTo) {
-    emailOptions.replyTo = replyTo;
-    emailOptions.reply_to = replyTo; // supports both camelCase and snake_case formats
+    payload.replyTo = { email: replyTo };
   }
 
-  const { data, error } = await resend.emails.send(emailOptions);
+  // Use Node.js native global fetch
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'accept': 'application/json',
+      'api-key': apiKey,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
 
-  if (error) {
-    throw new Error(`Resend error: ${JSON.stringify(error)}`);
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(`Brevo error: ${JSON.stringify(data)}`);
   }
 
   return data;
