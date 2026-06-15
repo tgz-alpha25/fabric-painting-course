@@ -4,8 +4,7 @@ import api from '../utils/api';
 import Hls from 'hls.js';
 import toast from 'react-hot-toast';
 import {
-  FaPlay, FaPause, FaLock, FaChevronDown, FaChevronUp,
-  FaVolumeUp, FaVolumeMute, FaExpand, FaCompress, FaSpinner
+  FaPlay, FaLock, FaChevronDown, FaChevronUp, FaSpinner
 } from 'react-icons/fa';
 import './Course.css';
 
@@ -126,6 +125,7 @@ const CoursePage = () => {
       clearInterval(progressTimer.current);
       if (hlsRef.current) hlsRef.current.destroy();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamUrl]);
 
   const toggleGroup = (group) => {

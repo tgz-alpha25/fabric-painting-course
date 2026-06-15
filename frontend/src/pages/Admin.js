@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import {
   FaUsers, FaBell, FaCloud, FaSearch, FaTrash, FaUnlock, FaLock,
-  FaCheck, FaTimes, FaChevronDown, FaChevronUp, FaPlus, FaSync,
+  FaCheck, FaTimes, FaChevronDown, FaChevronUp, FaSync,
   FaDesktop, FaPlay, FaClock, FaExclamationTriangle, FaVideo
 } from 'react-icons/fa';
 import './Admin.css';
@@ -21,7 +21,6 @@ const AdminPage = () => {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [accessModal, setAccessModal] = useState(null);
   const [accessMonths, setAccessMonths] = useState(6);
-  const [adminKey, setAdminKey] = useState('');
   const [authenticated, setAuthenticated] = useState(false);
 
   // Simple admin login check
