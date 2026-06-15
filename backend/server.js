@@ -10,6 +10,10 @@ const { checkExpiredAccess, checkCloudinaryUsage } = require('./services/cronJob
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Trust Render/Heroku proxy — required for express-rate-limit to work correctly
+// behind a reverse proxy that sets X-Forwarded-For header
+app.set('trust proxy', 1);
+
 // Initialize Firebase
 initFirebase();
 
