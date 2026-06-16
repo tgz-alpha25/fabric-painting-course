@@ -239,8 +239,10 @@ exports.login = async (req, res) => {
     }
 
     const isNewDevice = !existingDeviceId;
-    const otherSessionActive = userData.currentSession && userData.currentSession.deviceId && userData.currentSession.deviceId !== existingDeviceId;
-    const isVerificationRequired = isNewDevice || otherSessionActive;
+
+    // Only NEW (unrecognized) devices need email verification.
+    // If the device is already trusted, let it log in directly even if another session is active.
+    const isVerificationRequired = isNewDevice;
 
     if (isNewDevice && deviceIds.length >= (userData.deviceLimit || 3)) {
       return res.status(403).json({

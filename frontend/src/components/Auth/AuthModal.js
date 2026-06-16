@@ -38,21 +38,23 @@ const AuthModal = () => {
     setLoading(true);
     try {
       const result = await login(loginData.email, loginData.password);
-      const displayName = result.user?.name?.split(' ')[0] || result.user?.email?.split('@')[0] || 'User';
+      const rawName = result?.user?.name || result?.user?.email || '';
+      const displayName = rawName.includes('@') ? rawName.split('@')[0] : (rawName.split(' ')[0] || 'there');
       toast.success(`Welcome back, ${displayName}!`);
       closeAuth();
     } catch (err) {
       const code = err.response?.data?.code;
-      const msg = err.response?.data?.message || err.response?.data?.error || 'Login failed';
+      // outer msg for non-approval errors
+      const msg = err.response?.data?.error || err.response?.data?.message || 'Login failed. Please check your credentials.';
       if (code === 'DEVICE_APPROVAL_REQUIRED') {
         const reqId = err.response?.data?.requestId;
-        const msg = err.response?.data?.message || 'A verification email has been sent.';
+        const approvalMsg = err.response?.data?.message || 'A verification email has been sent. Check your inbox and click Allow.';
         setRequestId(reqId);
-        setApprovalMessage(msg);
-        setStep(3); // Go to waiting for approval screen
-        toast(msg, { icon: '📧', duration: 6000 });
+        setApprovalMessage(approvalMsg);
+        setStep(3);
+        toast(approvalMsg, { icon: '📧', duration: 6000 });
       } else if (code === 'DEVICE_LIMIT_REACHED') {
-        toast.error('Device limit reached. Contact admin to unlock.');
+        toast.error('Device limit reached. Contact admin to remove an old device.');
       } else {
         toast.error(msg);
       }
@@ -66,26 +68,63 @@ const AuthModal = () => {
     if (authMode !== 'login' || step !== 3 || !requestId) return;
 
     let intervalId;
+    let alreadyHandled = false; // guard against race conditions
+
     const checkStatus = async () => {
+      if (alreadyHandled) return;
       try {
         const res = await api.get(`/auth/check-approval?requestId=${requestId}`);
         if (res.data.approved) {
+          alreadyHandled = true;
           clearInterval(intervalId);
-          toast.success('Login approved! Welcome back.');
+          const rawName = res.data.user?.name || res.data.user?.email || '';
+          const displayName = rawName.includes('@') ? rawName.split('@')[0] : (rawName.split(' ')[0] || 'there');
+          toast.success(`Login approved! Welcome back, ${displayName}!`);
           loginWithToken(res.data.token, res.data.user);
           closeAuth();
         }
+        // still pending — keep polling silently
       } catch (err) {
-        clearInterval(intervalId);
-        const msg = err.response?.data?.error || err.response?.data?.message || 'Approval failed';
-        toast.error(msg);
-        setStep(1);
-        setRequestId(null);
+        if (alreadyHandled) return; // already logged in, ignore
+        const status = err.response?.status;
+        const code = err.response?.data?.code;
+
+        // 404 "Request not found" = request was deleted (already processed or expired)
+        // Stop polling silently and let user retry
+        if (status === 404) {
+          alreadyHandled = true;
+          clearInterval(intervalId);
+          setStep(1);
+          setRequestId(null);
+          toast.error('Verification link expired or already used. Please log in again.');
+          return;
+        }
+
+        if (code === 'APPROVAL_DENIED') {
+          alreadyHandled = true;
+          clearInterval(intervalId);
+          toast.error('Login was denied from the approval email.');
+          setStep(1);
+          setRequestId(null);
+          return;
+        }
+
+        if (code === 'APPROVAL_EXPIRED') {
+          alreadyHandled = true;
+          clearInterval(intervalId);
+          toast.error('Approval link expired. Please log in again.');
+          setStep(1);
+          setRequestId(null);
+          return;
+        }
+
+        // Network / transient error — don't stop polling, try again next tick
+        console.warn('Check approval transient error:', err.message);
       }
     };
 
     intervalId = setInterval(checkStatus, 3000);
-    
+
     // Run initial check immediately
     checkStatus();
 
