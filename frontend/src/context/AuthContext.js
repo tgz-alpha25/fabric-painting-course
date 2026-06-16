@@ -123,8 +123,18 @@ export const AuthProvider = ({ children }) => {
     }
   }, [user]);
 
+  const getOrCreateDeviceId = () => {
+    let devId = localStorage.getItem('deviceId');
+    if (!devId) {
+      devId = 'device_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      localStorage.setItem('deviceId', devId);
+    }
+    return devId;
+  };
+
   const login = async (email, password) => {
-    const res = await api.post('/auth/login', { email, password });
+    const deviceId = getOrCreateDeviceId();
+    const res = await api.post('/auth/login', { email, password, deviceId });
     if (res.status === 202) {
       const err = new Error(res.data.message || 'Device approval required');
       err.response = res;

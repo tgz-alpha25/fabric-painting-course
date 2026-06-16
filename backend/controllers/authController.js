@@ -173,7 +173,7 @@ exports.register = async (req, res) => {
 // LOGIN
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, deviceId: clientDeviceId } = req.body;
     const db = getDb();
     const authClient = getAuth();
 
@@ -226,10 +226,17 @@ exports.login = async (req, res) => {
     const devices = userData.devices || {};
     const deviceIds = Object.keys(devices);
 
-    // Check if this device already exists
-    const existingDeviceId = deviceIds.find(
-      (id) => devices[id].userAgent === deviceInfo.userAgent && devices[id].ip === deviceInfo.ip
-    );
+    // Look up using clientDeviceId if provided. Fallback to userAgent/IP matching if clientDeviceId is missing
+    let existingDeviceId = null;
+    if (clientDeviceId) {
+      if (devices[clientDeviceId]) {
+        existingDeviceId = clientDeviceId;
+      }
+    } else {
+      existingDeviceId = deviceIds.find(
+        (id) => devices[id].userAgent === deviceInfo.userAgent && devices[id].ip === deviceInfo.ip
+      );
+    }
 
     const isNewDevice = !existingDeviceId;
     const otherSessionActive = userData.currentSession && userData.currentSession.deviceId && userData.currentSession.deviceId !== existingDeviceId;

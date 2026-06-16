@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../utils/api';
 import { FaCheck, FaTimes, FaSpinner } from 'react-icons/fa';
@@ -6,8 +6,12 @@ import { FaCheck, FaTimes, FaSpinner } from 'react-icons/fa';
 const ApproveDevice = () => {
   const [params] = useSearchParams();
   const [status, setStatus] = useState('loading'); // loading | approved | denied | error
+  const apiCalled = useRef(false);
 
   useEffect(() => {
+    if (apiCalled.current) return;
+    apiCalled.current = true;
+
     const token = params.get('token');
     const requestId = params.get('requestId');
     const allow = params.get('allow');
