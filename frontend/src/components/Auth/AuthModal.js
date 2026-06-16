@@ -77,7 +77,6 @@ const AuthModal = () => {
         }
       } catch (err) {
         clearInterval(intervalId);
-        const code = err.response?.data?.code;
         const msg = err.response?.data?.error || err.response?.data?.message || 'Approval failed';
         toast.error(msg);
         setStep(1);
