@@ -223,11 +223,34 @@ exports.login = async (req, res) => {
     }
 
     const deviceInfo = getDeviceInfo(req);
-    const deviceId = uuidv4();
+    const devices = userData.devices || {};
+    const deviceIds = Object.keys(devices);
+
+    // Check if this device already exists
+    const existingDeviceId = deviceIds.find(
+      (id) => devices[id].userAgent === deviceInfo.userAgent && devices[id].ip === deviceInfo.ip
+    );
+
+    const isNewDevice = !existingDeviceId;
+    const otherSessionActive = userData.currentSession && userData.currentSession.deviceId && userData.currentSession.deviceId !== existingDeviceId;
+    const isVerificationRequired = isNewDevice || otherSessionActive;
+
+    if (isNewDevice && deviceIds.length >= (userData.deviceLimit || 3)) {
+      return res.status(403).json({
+        error: `Device limit reached (${userData.deviceLimit || 3} devices). Contact admin to remove a device.`,
+        code: 'DEVICE_LIMIT_REACHED',
+        devices: deviceIds.map((id) => ({
+          id,
+          info: `${devices[id].browser} on ${devices[id].os}`,
+          lastLogin: devices[id].lastLogin,
+        })),
+      });
+    }
+
+    const assignedDeviceId = existingDeviceId || uuidv4();
     const sessionToken = uuidv4();
 
-    // Check current session (another device is logged in)
-    if (userData.currentSession && userData.currentSession.deviceId) {
+    if (isVerificationRequired) {
       // Send approval email
       const requestId = uuidv4();
       const approvalToken = uuidv4();
@@ -235,7 +258,7 @@ exports.login = async (req, res) => {
       await db.collection('deviceApprovalRequests').doc(requestId).set({
         userId: uid,
         userEmail: email,
-        newDeviceId: deviceId,
+        newDeviceId: assignedDeviceId,
         newDeviceInfo: deviceInfo,
         token: approvalToken,
         status: 'pending',
@@ -252,10 +275,10 @@ exports.login = async (req, res) => {
         subject: 'New Device Login Request - Fabric Painting Course',
         html: `
           <h2>New Login Detected</h2>
-          <p>A new device is trying to log in to your account.</p>
+          <p>A login request is pending for your account.</p>
           <p><b>Device:</b> ${deviceInfo.browser} on ${deviceInfo.os}</p>
           <p><b>IP:</b> ${deviceInfo.ip}</p>
-          <p>If this is you, click <b>Allow</b> to approve. Your current session will be logged out.</p>
+          <p>If this is you, click <b>Allow</b> to approve. Any other active session will be logged out.</p>
           <a href="${approveUrl}" style="background:#4CAF50;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;margin-right:10px">Allow New Device</a>
           <a href="${denyUrl}" style="background:#f44336;color:white;padding:10px 20px;text-decoration:none;border-radius:5px">Deny</a>
           <p>This link expires in 15 minutes.</p>
@@ -264,33 +287,10 @@ exports.login = async (req, res) => {
 
       return res.status(202).json({
         code: 'DEVICE_APPROVAL_REQUIRED',
-        message: 'Another device is currently logged in. An approval email has been sent.',
+        message: isNewDevice
+          ? 'Login from a new device detected. An approval email has been sent.'
+          : 'Another device is currently logged in. An approval email has been sent.',
         requestId,
-      });
-    }
-
-    // Check device footprint limit
-    const devices = userData.devices || {};
-    const deviceIds = Object.keys(devices);
-
-    let assignedDeviceId = deviceId;
-
-    // Check if this device already exists
-    const existingDevice = deviceIds.find(
-      (id) => devices[id].userAgent === deviceInfo.userAgent && devices[id].ip === deviceInfo.ip
-    );
-
-    if (existingDevice) {
-      assignedDeviceId = existingDevice;
-    } else if (deviceIds.length >= (userData.deviceLimit || 3)) {
-      return res.status(403).json({
-        error: `Device limit reached (${userData.deviceLimit || 3} devices). Contact admin to remove a device.`,
-        code: 'DEVICE_LIMIT_REACHED',
-        devices: deviceIds.map((id) => ({
-          id,
-          info: `${devices[id].browser} on ${devices[id].os}`,
-          lastLogin: devices[id].lastLogin,
-        })),
       });
     }
 
@@ -382,10 +382,9 @@ exports.approveDevice = async (req, res) => {
       role = 'admin';
     }
 
-    const devices = userData.devices || {};
-    const deviceIds = Object.keys(devices);
+    const newDeviceId = requestData.newDeviceId;
 
-    if (deviceIds.length >= (userData.deviceLimit || 3)) {
+    if (!devices[newDeviceId] && deviceIds.length >= (userData.deviceLimit || 3)) {
       // Remove oldest device
       const oldest = deviceIds.sort((a, b) => {
         const da = devices[a].lastLogin?.toDate?.() || new Date(devices[a].lastLogin);
@@ -394,8 +393,6 @@ exports.approveDevice = async (req, res) => {
       })[0];
       delete devices[oldest];
     }
-
-    const newDeviceId = requestData.newDeviceId;
     devices[newDeviceId] = { ...requestData.newDeviceInfo, lastLogin: new Date() };
 
     await userDoc.ref.update({

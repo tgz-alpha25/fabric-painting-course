@@ -125,6 +125,11 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     const res = await api.post('/auth/login', { email, password });
+    if (res.status === 202) {
+      const err = new Error(res.data.message || 'Device approval required');
+      err.response = res;
+      throw err;
+    }
     const { token, user: userData } = res.data;
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(userData));

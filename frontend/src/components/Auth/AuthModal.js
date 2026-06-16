@@ -11,6 +11,7 @@ const AuthModal = () => {
   const [step, setStep] = useState(1); // 1=form, 2=OTP, 3=Waiting for Approval
   const [otp, setOtp] = useState('');
   const [requestId, setRequestId] = useState(null);
+  const [approvalMessage, setApprovalMessage] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [mouseDownTarget, setMouseDownTarget] = useState(null);
 
@@ -37,16 +38,19 @@ const AuthModal = () => {
     setLoading(true);
     try {
       const result = await login(loginData.email, loginData.password);
-      toast.success(`Welcome back, ${result.user?.name?.split(' ')[0]}!`);
+      const displayName = result.user?.name?.split(' ')[0] || result.user?.email?.split('@')[0] || 'User';
+      toast.success(`Welcome back, ${displayName}!`);
       closeAuth();
     } catch (err) {
       const code = err.response?.data?.code;
       const msg = err.response?.data?.message || err.response?.data?.error || 'Login failed';
       if (code === 'DEVICE_APPROVAL_REQUIRED') {
         const reqId = err.response?.data?.requestId;
+        const msg = err.response?.data?.message || 'A verification email has been sent.';
         setRequestId(reqId);
+        setApprovalMessage(msg);
         setStep(3); // Go to waiting for approval screen
-        toast('Approval email sent. Please check your inbox.', { icon: '📧', duration: 6000 });
+        toast(msg, { icon: '📧', duration: 6000 });
       } else if (code === 'DEVICE_LIMIT_REACHED') {
         toast.error('Device limit reached. Contact admin to unlock.');
       } else {
@@ -205,7 +209,7 @@ const AuthModal = () => {
             <div className="spinner" style={{ width: 40, height: 40, borderWidth: 3, margin: '0 auto 20px', borderColor: 'var(--primary)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
             <h3 style={{ marginBottom: 12, fontFamily: 'var(--font-display)', color: 'var(--text)' }}>Waiting for Approval</h3>
             <p style={{ color: 'var(--text-muted)', fontSize: 14, lineHeight: '1.5', margin: '0 auto 20px', maxWidth: '300px' }}>
-              Another device is currently logged in. We sent a verification email to <b>{loginData.email}</b>.
+              {approvalMessage || 'A verification email has been sent.'}
             </p>
             <p style={{ color: 'var(--text-muted)', fontSize: 13, fontStyle: 'italic' }}>
               Please click <b>Allow</b> in that email to log in on this device.
