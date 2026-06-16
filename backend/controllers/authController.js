@@ -390,6 +390,8 @@ exports.approveDevice = async (req, res) => {
     }
 
     const newDeviceId = requestData.newDeviceId;
+    const devices = userData.devices || {};
+    const deviceIds = Object.keys(devices);
 
     if (!devices[newDeviceId] && deviceIds.length >= (userData.deviceLimit || 3)) {
       // Remove oldest device
