@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
@@ -7,6 +8,7 @@ import './AuthModal.css';
 
 const AuthModal = () => {
   const { showAuthModal, closeAuth, authMode, setAuthMode, login, register, loginWithToken } = useAuth();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState(1); // 1=form, 2=OTP, 3=Waiting for Approval
   const [otp, setOtp] = useState('');
@@ -41,6 +43,9 @@ const AuthModal = () => {
       const rawName = result?.user?.name || result?.user?.email || '';
       const displayName = rawName.includes('@') ? rawName.split('@')[0] : (rawName.split(' ')[0] || 'there');
       toast.success(`Welcome back, ${displayName}!`);
+      if (result?.user?.role === 'admin') {
+        navigate('/admin');
+      }
       closeAuth();
     } catch (err) {
       const code = err.response?.data?.code;
@@ -81,6 +86,9 @@ const AuthModal = () => {
           const displayName = rawName.includes('@') ? rawName.split('@')[0] : (rawName.split(' ')[0] || 'there');
           toast.success(`Login approved! Welcome back, ${displayName}!`);
           loginWithToken(res.data.token, res.data.user);
+          if (res.data.user?.role === 'admin') {
+            navigate('/admin');
+          }
           closeAuth();
         }
         // still pending — keep polling silently
@@ -131,7 +139,7 @@ const AuthModal = () => {
     return () => {
       clearInterval(intervalId);
     };
-  }, [authMode, step, requestId, loginWithToken, closeAuth]);
+  }, [authMode, step, requestId, loginWithToken, closeAuth, navigate]);
 
   const sendOTP = async () => {
     if (!registerData.email) return toast.error('Enter a valid email address');

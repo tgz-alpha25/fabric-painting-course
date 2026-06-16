@@ -239,10 +239,26 @@ exports.login = async (req, res) => {
     }
 
     const isNewDevice = !existingDeviceId;
+    const isSessionConflict = !isNewDevice &&
+      userData.currentSession &&
+      userData.currentSession.deviceId &&
+      userData.currentSession.deviceId !== existingDeviceId;
 
-    // Only NEW (unrecognized) devices need email verification.
-    // If the device is already trusted, let it log in directly even if another session is active.
-    const isVerificationRequired = isNewDevice;
+    // Login scenarios:
+    // admin_login      → admin must verify by email on EVERY login (security)
+    // new_device       → first time this browser logs in (one-time trust approval)
+    // session_conflict → trusted device but another session is already active
+    // null             → trusted device + no other session → direct login
+    let loginScenario = null;
+    if (role === 'admin') {
+      loginScenario = 'admin_login';
+    } else if (isNewDevice) {
+      loginScenario = 'new_device';
+    } else if (isSessionConflict) {
+      loginScenario = 'session_conflict';
+    }
+
+    const isVerificationRequired = loginScenario !== null;
 
     if (isNewDevice && deviceIds.length >= (userData.deviceLimit || 3)) {
       return res.status(403).json({
@@ -260,7 +276,6 @@ exports.login = async (req, res) => {
     const sessionToken = uuidv4();
 
     if (isVerificationRequired) {
-      // Send approval email
       const requestId = uuidv4();
       const approvalToken = uuidv4();
 
@@ -272,34 +287,87 @@ exports.login = async (req, res) => {
         token: approvalToken,
         status: 'pending',
         sessionToken,
+        scenario: loginScenario,
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 15 * 60 * 1000),
       });
 
       const approveUrl = `${process.env.FRONTEND_URL}/approve-device?token=${approvalToken}&requestId=${requestId}&allow=true`;
-      const denyUrl = `${process.env.FRONTEND_URL}/approve-device?token=${approvalToken}&requestId=${requestId}&allow=false`;
+      const denyUrl   = `${process.env.FRONTEND_URL}/approve-device?token=${approvalToken}&requestId=${requestId}&allow=false`;
 
-      await sendEmail({
-        to: email,
-        subject: 'New Device Login Request - Fabric Painting Course',
-        html: `
-          <h2>New Login Detected</h2>
-          <p>A login request is pending for your account.</p>
-          <p><b>Device:</b> ${deviceInfo.browser} on ${deviceInfo.os}</p>
-          <p><b>IP:</b> ${deviceInfo.ip}</p>
-          <p>If this is you, click <b>Allow</b> to approve. Any other active session will be logged out.</p>
-          <a href="${approveUrl}" style="background:#4CAF50;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;margin-right:10px">Allow New Device</a>
-          <a href="${denyUrl}" style="background:#f44336;color:white;padding:10px 20px;text-decoration:none;border-radius:5px">Deny</a>
-          <p>This link expires in 15 minutes.</p>
-        `,
-      });
+      const btnStyle = 'display:inline-block;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:15px;margin:6px';
+
+      let emailSubject, emailHtml;
+
+      if (loginScenario === 'admin_login') {
+        emailSubject = '🔐 Admin Login Verification – MS Sri Meenakshi Academy';
+        emailHtml = `
+          <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e7e5e4;border-radius:12px;background:#fff8f0">
+            <h2 style="color:#7c3d12;text-align:center;margin-top:0">Admin Login Verification</h2>
+            <p>Hello Admin,</p>
+            <p>A login attempt was detected for the <strong>Admin account</strong>. Please verify it is you before access is granted.</p>
+            <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #e7e5e4">
+              <tr><td style="padding:10px 16px;color:#78716c;width:120px">Device</td><td style="padding:10px 16px;font-weight:bold">${deviceInfo.browser} on ${deviceInfo.os}</td></tr>
+              <tr style="background:#fafaf9"><td style="padding:10px 16px;color:#78716c">IP Address</td><td style="padding:10px 16px;font-weight:bold">${deviceInfo.ip}</td></tr>
+            </table>
+            <div style="text-align:center;margin:28px 0">
+              <a href="${approveUrl}" style="${btnStyle};background:#16a34a;color:white">✅ Allow Login</a>
+              <a href="${denyUrl}"   style="${btnStyle};background:#dc2626;color:white">❌ Deny Login</a>
+            </div>
+            <p style="color:#78716c;font-size:13px;text-align:center">This link expires in 15 minutes. If you did not attempt this login, click <strong>Deny</strong> immediately.</p>
+          </div>`;
+      } else if (loginScenario === 'session_conflict') {
+        emailSubject = '⚠️ Login Alert – Another Device Wants to Sign In';
+        emailHtml = `
+          <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e7e5e4;border-radius:12px;background:#fff8f0">
+            <h2 style="color:#7c3d12;text-align:center;margin-top:0">Login Attempt on Another Device</h2>
+            <p>Hello,</p>
+            <p>Someone is trying to log in to your account from a <strong>different device</strong> while you are currently logged in.</p>
+            <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #e7e5e4">
+              <tr><td style="padding:10px 16px;color:#78716c;width:120px">New Device</td><td style="padding:10px 16px;font-weight:bold">${deviceInfo.browser} on ${deviceInfo.os}</td></tr>
+              <tr style="background:#fafaf9"><td style="padding:10px 16px;color:#78716c">IP Address</td><td style="padding:10px 16px;font-weight:bold">${deviceInfo.ip}</td></tr>
+            </table>
+            <p>👉 <strong>Allow</strong> — Your current session will be logged out and the new device will be granted access.</p>
+            <p>🚫 <strong>Deny</strong> — The new login attempt is rejected. Your current session stays active.</p>
+            <div style="text-align:center;margin:28px 0">
+              <a href="${approveUrl}" style="${btnStyle};background:#16a34a;color:white">✅ Allow (Log me out)</a>
+              <a href="${denyUrl}"   style="${btnStyle};background:#dc2626;color:white">❌ Deny (Keep me logged in)</a>
+            </div>
+            <p style="color:#78716c;font-size:13px;text-align:center">This link expires in 15 minutes. If this was not you, click <strong>Deny</strong> immediately and change your password.</p>
+          </div>`;
+      } else {
+        // new_device
+        emailSubject = '🔑 New Device Login – MS Sri Meenakshi Academy';
+        emailHtml = `
+          <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;border:1px solid #e7e5e4;border-radius:12px;background:#fff8f0">
+            <h2 style="color:#7c3d12;text-align:center;margin-top:0">New Device Login Request</h2>
+            <p>Hello,</p>
+            <p>A login was attempted from a <strong>new device</strong>. Once approved, this device will be trusted for future logins.</p>
+            <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #e7e5e4">
+              <tr><td style="padding:10px 16px;color:#78716c;width:120px">Device</td><td style="padding:10px 16px;font-weight:bold">${deviceInfo.browser} on ${deviceInfo.os}</td></tr>
+              <tr style="background:#fafaf9"><td style="padding:10px 16px;color:#78716c">IP Address</td><td style="padding:10px 16px;font-weight:bold">${deviceInfo.ip}</td></tr>
+            </table>
+            <div style="text-align:center;margin:28px 0">
+              <a href="${approveUrl}" style="${btnStyle};background:#16a34a;color:white">✅ Allow This Device</a>
+              <a href="${denyUrl}"   style="${btnStyle};background:#dc2626;color:white">❌ Deny</a>
+            </div>
+            <p style="color:#78716c;font-size:13px;text-align:center">This link expires in 15 minutes. If you did not attempt this login, click <strong>Deny</strong>.</p>
+          </div>`;
+      }
+
+      await sendEmail({ to: email, subject: emailSubject, html: emailHtml });
+
+      const msgMap = {
+        admin_login:      'Admin verification email sent. Please check your inbox and click Allow.',
+        new_device:       'New device detected. An approval email has been sent to your inbox.',
+        session_conflict: 'You are already logged in on another device. Check your email — click Allow to switch, or Deny to cancel.',
+      };
 
       return res.status(202).json({
         code: 'DEVICE_APPROVAL_REQUIRED',
-        message: isNewDevice
-          ? 'Login from a new device detected. An approval email has been sent.'
-          : 'Another device is currently logged in. An approval email has been sent.',
+        message: msgMap[loginScenario],
         requestId,
+        scenario: loginScenario,
       });
     }
 
@@ -394,16 +462,20 @@ exports.approveDevice = async (req, res) => {
     const newDeviceId = requestData.newDeviceId;
     const devices = userData.devices || {};
     const deviceIds = Object.keys(devices);
+    const scenario = requestData.scenario || 'new_device';
 
-    if (!devices[newDeviceId] && deviceIds.length >= (userData.deviceLimit || 3)) {
-      // Remove oldest device
-      const oldest = deviceIds.sort((a, b) => {
-        const da = devices[a].lastLogin?.toDate?.() || new Date(devices[a].lastLogin);
-        const db2 = devices[b].lastLogin?.toDate?.() || new Date(devices[b].lastLogin);
-        return da - db2;
-      })[0];
-      delete devices[oldest];
+    if (scenario === 'new_device') {
+      // First time this device is trusted — add to trusted list; evict oldest if at limit
+      if (!devices[newDeviceId] && deviceIds.length >= (userData.deviceLimit || 3)) {
+        const oldest = deviceIds.sort((a, b) => {
+          const da = devices[a].lastLogin?.toDate?.() || new Date(devices[a].lastLogin);
+          const db2 = devices[b].lastLogin?.toDate?.() || new Date(devices[b].lastLogin);
+          return da - db2;
+        })[0];
+        delete devices[oldest];
+      }
     }
+    // For admin_login and session_conflict the device is already trusted (or becomes so); just update lastLogin
     devices[newDeviceId] = { ...requestData.newDeviceInfo, lastLogin: new Date() };
 
     await userDoc.ref.update({
