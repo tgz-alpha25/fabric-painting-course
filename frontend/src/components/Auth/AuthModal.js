@@ -6,10 +6,11 @@ import { FaTimes, FaEye, FaEyeSlash, FaBrush } from 'react-icons/fa';
 import './AuthModal.css';
 
 const AuthModal = () => {
-  const { showAuthModal, closeAuth, authMode, setAuthMode, login, register } = useAuth();
+  const { showAuthModal, closeAuth, authMode, setAuthMode, login, register, loginWithToken } = useAuth();
   const [loading, setLoading] = useState(false);
-  const [step, setStep] = useState(1); // 1=form, 2=OTP
+  const [step, setStep] = useState(1); // 1=form, 2=OTP, 3=Waiting for Approval
   const [otp, setOtp] = useState('');
+  const [requestId, setRequestId] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
   const [mouseDownTarget, setMouseDownTarget] = useState(null);
 
@@ -26,6 +27,7 @@ const AuthModal = () => {
       document.body.style.overflow = '';
       setStep(1);
       setOtp('');
+      setRequestId(null);
     }
     return () => { document.body.style.overflow = ''; };
   }, [showAuthModal]);
@@ -41,8 +43,10 @@ const AuthModal = () => {
       const code = err.response?.data?.code;
       const msg = err.response?.data?.message || err.response?.data?.error || 'Login failed';
       if (code === 'DEVICE_APPROVAL_REQUIRED') {
+        const reqId = err.response?.data?.requestId;
+        setRequestId(reqId);
+        setStep(3); // Go to waiting for approval screen
         toast('Approval email sent. Please check your inbox.', { icon: '📧', duration: 6000 });
-        closeAuth();
       } else if (code === 'DEVICE_LIMIT_REACHED') {
         toast.error('Device limit reached. Contact admin to unlock.');
       } else {
@@ -52,6 +56,40 @@ const AuthModal = () => {
       setLoading(false);
     }
   };
+
+  // Polling for device approval
+  useEffect(() => {
+    if (authMode !== 'login' || step !== 3 || !requestId) return;
+
+    let intervalId;
+    const checkStatus = async () => {
+      try {
+        const res = await api.get(`/auth/check-approval?requestId=${requestId}`);
+        if (res.data.approved) {
+          clearInterval(intervalId);
+          toast.success('Login approved! Welcome back.');
+          loginWithToken(res.data.token, res.data.user);
+          closeAuth();
+        }
+      } catch (err) {
+        clearInterval(intervalId);
+        const code = err.response?.data?.code;
+        const msg = err.response?.data?.error || err.response?.data?.message || 'Approval failed';
+        toast.error(msg);
+        setStep(1);
+        setRequestId(null);
+      }
+    };
+
+    intervalId = setInterval(checkStatus, 3000);
+    
+    // Run initial check immediately
+    checkStatus();
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [authMode, step, requestId, loginWithToken, closeAuth]);
 
   const sendOTP = async () => {
     if (!registerData.email) return toast.error('Enter a valid email address');
@@ -127,15 +165,17 @@ const AuthModal = () => {
         </div>
 
         {/* Tabs */}
-        <div className="modal-tabs">
-          <button className={`tab ${authMode === 'login' ? 'active' : ''}`}
-            onClick={() => { setAuthMode('login'); setStep(1); }}>Login</button>
-          <button className={`tab ${authMode === 'register' ? 'active' : ''}`}
-            onClick={() => { setAuthMode('register'); setStep(1); }}>Register</button>
-        </div>
+        {step === 1 && (
+          <div className="modal-tabs">
+            <button className={`tab ${authMode === 'login' ? 'active' : ''}`}
+              onClick={() => { setAuthMode('login'); setStep(1); }}>Login</button>
+            <button className={`tab ${authMode === 'register' ? 'active' : ''}`}
+              onClick={() => { setAuthMode('register'); setStep(1); }}>Register</button>
+          </div>
+        )}
 
         {/* LOGIN FORM */}
-        {authMode === 'login' && (
+        {authMode === 'login' && step === 1 && (
           <form onSubmit={handleLogin} className="modal-form">
             <div className="input-group">
               <label className="input-label">Email Address</label>
@@ -157,6 +197,28 @@ const AuthModal = () => {
               {loading ? <span className="spinner" style={{ width: 18, height: 18, borderWidth: 2 }} /> : 'Sign In'}
             </button>
           </form>
+        )}
+
+        {/* WAITING FOR APPROVAL VIEW */}
+        {authMode === 'login' && step === 3 && (
+          <div className="modal-form waiting-approval" style={{ textAlign: 'center', padding: '20px 0' }}>
+            <div className="spinner" style={{ width: 40, height: 40, borderWidth: 3, margin: '0 auto 20px', borderColor: 'var(--primary)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+            <h3 style={{ marginBottom: 12, fontFamily: 'var(--font-display)', color: 'var(--text)' }}>Waiting for Approval</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: 14, lineHeight: '1.5', margin: '0 auto 20px', maxWidth: '300px' }}>
+              Another device is currently logged in. We sent a verification email to <b>{loginData.email}</b>.
+            </p>
+            <p style={{ color: 'var(--text-muted)', fontSize: 13, fontStyle: 'italic' }}>
+              Please click <b>Allow</b> in that email to log in on this device.
+            </p>
+            <button 
+              type="button" 
+              className="btn btn-ghost" 
+              style={{ marginTop: 24, width: '100%', justifyContent: 'center' }}
+              onClick={() => { setStep(1); setRequestId(null); }}
+            >
+              Cancel
+            </button>
+          </div>
         )}
 
         {/* REGISTER FORM */}

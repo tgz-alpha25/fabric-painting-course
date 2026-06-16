@@ -1,5 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import api from '../utils/api';
+import { db } from '../config/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import toast from 'react-hot-toast';
 
 const AuthContext = createContext(null);
 
@@ -54,6 +57,43 @@ export const AuthProvider = ({ children }) => {
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
+  // Real-time listener to detect if this session was invalidated by another login
+  useEffect(() => {
+    if (!user) return;
+
+    const token = localStorage.getItem('token');
+    if (!token) return;
+
+    const decoded = parseJwt(token);
+    const mySessionToken = decoded?.sessionToken;
+    if (!mySessionToken) return;
+
+    // Listen to changes in the user's Firestore document
+    const unsub = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const currentSession = data.currentSession;
+        
+        // If current session is null, or it has a different session token, we are logged out!
+        if (!currentSession || currentSession.sessionToken !== mySessionToken) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          setUser(null);
+          toast.error('Session expired. Another device logged in.', { id: 'session-conflict-toast' });
+          
+          // Redirect to home if they are on a protected route
+          if (window.location.pathname !== '/') {
+            window.location.href = '/';
+          }
+        }
+      }
+    }, (error) => {
+      console.error('Firestore user snapshot error:', error);
+    });
+
+    return () => unsub();
+  }, [user]);
+
   // Handle automatic JWT expiration logout
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -92,6 +132,12 @@ export const AuthProvider = ({ children }) => {
     return res.data;
   };
 
+  const loginWithToken = (token, userData) => {
+    localStorage.setItem('token', token);
+    localStorage.setItem('user', JSON.stringify(userData));
+    setUser(userData);
+  };
+
   const register = async (formData) => {
     const res = await api.post('/auth/register', formData);
     return res.data;
@@ -115,7 +161,7 @@ export const AuthProvider = ({ children }) => {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, login, register, logout, showAuthModal, openAuth, closeAuth, authMode, setAuthMode }}
+      value={{ user, loading, login, register, logout, loginWithToken, showAuthModal, openAuth, closeAuth, authMode, setAuthMode }}
     >
       {children}
     </AuthContext.Provider>

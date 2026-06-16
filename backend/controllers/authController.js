@@ -410,12 +410,74 @@ exports.approveDevice = async (req, res) => {
 
     await requestDoc.ref.update({ status: 'approved' });
 
-    const jwtToken = generateToken(requestData.userId, requestData.sessionToken, role);
-
-    res.json({ message: 'Device approved', token: jwtToken });
+    res.json({ message: 'Device approved successfully' });
   } catch (err) {
     console.error('Approve device error:', err);
     res.status(500).json({ error: 'Failed to process approval' });
+  }
+};
+
+// CHECK APPROVAL STATUS (for polling from waiting device)
+exports.checkApproval = async (req, res) => {
+  try {
+    const { requestId } = req.query;
+    if (!requestId) {
+      return res.status(400).json({ error: 'Request ID is required' });
+    }
+
+    const db = getDb();
+    const requestDoc = await db.collection('deviceApprovalRequests').doc(requestId).get();
+
+    if (!requestDoc.exists) {
+      return res.status(404).json({ error: 'Request not found', code: 'APPROVAL_EXPIRED' });
+    }
+
+    const requestData = requestDoc.data();
+
+    if (requestData.status === 'denied') {
+      await requestDoc.ref.delete(); // Clean up request
+      return res.status(400).json({ error: 'Login request denied.', code: 'APPROVAL_DENIED' });
+    }
+
+    if (requestData.expiresAt.toDate() < new Date()) {
+      await requestDoc.ref.delete(); // Clean up expired request
+      return res.status(400).json({ error: 'Approval link expired.', code: 'APPROVAL_EXPIRED' });
+    }
+
+    if (requestData.status === 'approved') {
+      // Get updated user details
+      const userDoc = await db.collection('users').doc(requestData.userId).get();
+      if (!userDoc.exists) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const userData = userDoc.data();
+      const role = userData.role;
+
+      // Generate JWT Token for the waiting device
+      const jwtToken = generateToken(requestData.userId, requestData.sessionToken, role);
+
+      // Clean up/delete the request so it can't be claimed again
+      await requestDoc.ref.delete();
+
+      return res.json({
+        approved: true,
+        token: jwtToken,
+        user: {
+          uid: requestData.userId,
+          name: userData.name,
+          email: userData.email,
+          role: role,
+          mobile: userData.mobile,
+        }
+      });
+    }
+
+    // Still pending
+    return res.json({ approved: false });
+  } catch (err) {
+    console.error('Check approval error:', err);
+    res.status(500).json({ error: 'Failed to check approval status' });
   }
 };
 

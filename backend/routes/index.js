@@ -25,6 +25,7 @@ router.post('/auth/register', authLimiter, authController.register);
 router.post('/auth/login', authLimiter, authController.login);
 router.post('/auth/logout', verifyToken, authController.logout);
 router.post('/auth/approve-device', authController.approveDevice);
+router.get('/auth/check-approval', authController.checkApproval);
 router.get('/auth/profile', verifyToken, authController.getProfile);
 
 // VIDEO ROUTES (requires login + course access)
