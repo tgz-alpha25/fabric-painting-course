@@ -91,8 +91,14 @@ export const AuthProvider = ({ children }) => {
           if (userData) {
             const storedToken = localStorage.getItem('token');
             const storedUser  = localStorage.getItem('user');
+            const storedFirebaseToken = localStorage.getItem('firebaseToken');
             if (storedToken && storedUser) {
-              try { setUser(JSON.parse(storedUser)); } catch (e) { /* ignore */ }
+              try {
+                setUser(JSON.parse(storedUser));
+                if (storedFirebaseToken) {
+                  syncFirebaseAuth(storedFirebaseToken);
+                }
+              } catch (e) { /* ignore */ }
             }
           }
           break;
@@ -185,8 +191,14 @@ export const AuthProvider = ({ children }) => {
           signOut(firebaseClientAuth).catch(() => {});
         } else {
           const storedUser = localStorage.getItem('user');
+          const storedFirebaseToken = localStorage.getItem('firebaseToken');
           if (storedUser && storedUser !== 'undefined') {
-            try { setUser(JSON.parse(storedUser)); } catch (err) { setUser(null); }
+            try {
+              setUser(JSON.parse(storedUser));
+              if (storedFirebaseToken) {
+                syncFirebaseAuth(storedFirebaseToken);
+              }
+            } catch (err) { setUser(null); }
           }
         }
       }
@@ -199,54 +211,77 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     if (!user) return;
 
-    const token = localStorage.getItem('token');
-    if (!token) return;
+    // Wait until Firebase Auth is synchronized for this user before subscribing to Firestore
+    const unsubscribeAuth = firebaseClientAuth.onAuthStateChanged((firebaseUser) => {
+      if (!firebaseUser || firebaseUser.uid !== user.uid) {
+        // Not signed in to Firebase yet, or signed in as a different user
+        return;
+      }
 
-    const decoded = parseJwt(token);
-    const mySessionToken = decoded?.sessionToken;
-    if (!mySessionToken) return;
+      const token = localStorage.getItem('token');
+      if (!token) return;
 
-    const unsub = onSnapshot(
-      doc(db, 'users', user.uid),
-      (docSnap) => {
-        if (!docSnap.exists()) return;
-        const data = docSnap.data();
-        const currentSession = data.currentSession;
+      const decoded = parseJwt(token);
+      const mySessionToken = decoded?.sessionToken;
+      if (!mySessionToken) return;
 
-        if (!currentSession || currentSession.sessionToken !== mySessionToken) {
-          clearAuthStorage();
-          setUser(null);
-          signOut(firebaseClientAuth).catch(() => {});
+      // Clean up any existing snapshot subscription before creating a new one
+      if (activeUnsubSnapshot.current) {
+        activeUnsubSnapshot.current();
+        activeUnsubSnapshot.current = null;
+      }
 
-          // Tell all other tabs to also log out
-          broadcast(MSG.SESSION_EXPIRED);
+      const unsubSnapshot = onSnapshot(
+        doc(db, 'users', user.uid),
+        (docSnap) => {
+          if (!docSnap.exists()) return;
+          const data = docSnap.data();
+          const currentSession = data.currentSession;
 
-          toast.error('Session expired — another device logged in.', {
-            id: 'session-conflict-toast',
-          });
-
-          if (window.location.pathname !== '/') {
-            window.location.href = '/';
-          }
-        } else if (data.sessionInvalidatedAt && mySessionToken && data.currentSession?.loginAt) {
-          const invalidatedAt = data.sessionInvalidatedAt.toDate ? data.sessionInvalidatedAt.toDate() : new Date(data.sessionInvalidatedAt);
-          const loginAt = data.currentSession.loginAt.toDate ? data.currentSession.loginAt.toDate() : new Date(data.currentSession.loginAt);
-          if (invalidatedAt > loginAt) {
+          if (!currentSession || currentSession.sessionToken !== mySessionToken) {
             clearAuthStorage();
             setUser(null);
             signOut(firebaseClientAuth).catch(() => {});
+
+            // Tell all other tabs to also log out
             broadcast(MSG.SESSION_EXPIRED);
-            toast.error('Session invalidated by newer login.', { id: 'session-invalidated-toast' });
+
+            toast.error('Session expired — another device logged in.', {
+              id: 'session-conflict-toast',
+            });
+
             if (window.location.pathname !== '/') {
               window.location.href = '/';
             }
+          } else if (data.sessionInvalidatedAt && mySessionToken && data.currentSession?.loginAt) {
+            const invalidatedAt = data.sessionInvalidatedAt.toDate ? data.sessionInvalidatedAt.toDate() : new Date(data.sessionInvalidatedAt);
+            const loginAt = data.currentSession.loginAt.toDate ? data.currentSession.loginAt.toDate() : new Date(data.currentSession.loginAt);
+            if (invalidatedAt > loginAt) {
+              clearAuthStorage();
+              setUser(null);
+              signOut(firebaseClientAuth).catch(() => {});
+              broadcast(MSG.SESSION_EXPIRED);
+              toast.error('Session invalidated by newer login.', { id: 'session-invalidated-toast' });
+              if (window.location.pathname !== '/') {
+                window.location.href = '/';
+              }
+            }
           }
-        }
-      },
-      (error) => console.error('Firestore user snapshot error:', error)
-    );
+        },
+        (error) => console.error('Firestore user snapshot error:', error)
+      );
 
-    return () => unsub();
+      activeUnsubSnapshot.current = unsubSnapshot;
+    });
+
+    const activeUnsubSnapshot = { current: null };
+
+    return () => {
+      unsubscribeAuth();
+      if (activeUnsubSnapshot.current) {
+        activeUnsubSnapshot.current();
+      }
+    };
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 6. JWT expiration auto-logout ────────────────────────────────────────
