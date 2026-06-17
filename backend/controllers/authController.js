@@ -240,20 +240,26 @@ exports.login = async (req, res) => {
       );
     }
 
+    const assignedDeviceId = clientDeviceId || existingDeviceId || uuidv4();
+    const sessionToken = uuidv4();
+
     const isNewDevice = !existingDeviceId;
-    const isSessionConflict = !isNewDevice &&
+    const isSessionConflict = !!(
       userData.currentSession &&
       userData.currentSession.deviceId &&
-      userData.currentSession.deviceId !== existingDeviceId;
+      userData.currentSession.deviceId !== assignedDeviceId
+    );
 
     // Login scenarios:
     // admin_login      → admin must verify by email on EVERY login (security)
+    // session_conflict → another session is already active on a different device
     // new_device       → first time this browser logs in (one-time trust approval)
-    // session_conflict → trusted device but another session is already active
     // null             → trusted device + no other session → direct login
     let loginScenario = null;
     if (role === 'admin') {
       loginScenario = 'admin_login';
+    } else if (isSessionConflict) {
+      loginScenario = 'session_conflict';
     } else if (isNewDevice) {
       loginScenario = 'new_device';
     }
@@ -263,9 +269,6 @@ exports.login = async (req, res) => {
     // Note: If this is a new device and the user has reached their limit,
     // we still send the approval email. The oldest device will be evicted
     // automatically upon approval (self-healing device rotation).
-
-    const assignedDeviceId = clientDeviceId || existingDeviceId || uuidv4();
-    const sessionToken = uuidv4();
 
     if (isVerificationRequired) {
       const requestId = uuidv4();
