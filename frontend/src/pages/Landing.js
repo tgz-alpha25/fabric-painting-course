@@ -33,6 +33,12 @@ const Landing = () => {
     }
   };
 
+  const getDemoVideoUrl = () => {
+    const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+    const baseUrl = apiUrl.replace(/\/api$/, '');
+    return `${baseUrl}/videos/demo.mp4`;
+  };
+
   return (
     <div className="landing">
       {/* HERO SECTION */}
@@ -206,7 +212,7 @@ const Landing = () => {
             <button className="modal-close-btn" onClick={() => setVideoModalOpen(false)}>✕</button>
             <video controls controlsList="nodownload" onContextMenu={(e) => e.preventDefault()}
               style={{ width: '100%', borderRadius: 8 }}>
-              <source src="/demo.mp4" type="video/mp4" />
+              <source src={getDemoVideoUrl()} type="video/mp4" />
               Your browser does not support the video tag.
             </video>
           </div>

@@ -6,7 +6,7 @@ const { sendEmail } = require('../config/mailer');
 
 const generateToken = (uid, sessionToken, role) => {
   return jwt.sign({ uid, sessionToken, role }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    expiresIn: process.env.JWT_EXPIRES_IN || '1d',
   });
 };
 
@@ -254,8 +254,6 @@ exports.login = async (req, res) => {
       loginScenario = 'admin_login';
     } else if (isNewDevice) {
       loginScenario = 'new_device';
-    } else if (isSessionConflict) {
-      loginScenario = 'session_conflict';
     }
 
     const isVerificationRequired = loginScenario !== null;
@@ -272,7 +270,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    const assignedDeviceId = existingDeviceId || uuidv4();
+    const assignedDeviceId = clientDeviceId || existingDeviceId || uuidv4();
     const sessionToken = uuidv4();
 
     if (isVerificationRequired) {

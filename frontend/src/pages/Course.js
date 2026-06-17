@@ -212,7 +212,7 @@ const CoursePage = () => {
               <video
                 ref={videoRef}
                 className="course-video"
-                controlsList="nodownload nofullscreen noremoteplayback"
+                controlsList="nodownload noremoteplayback"
                 onContextMenu={(e) => e.preventDefault()}
                 disablePictureInPicture
                 playsInline
