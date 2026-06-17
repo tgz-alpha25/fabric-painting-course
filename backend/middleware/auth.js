@@ -77,7 +77,13 @@ const verifyCourseAccess = async (req, res, next) => {
       return next();
     }
 
+    // Demo video is free — any logged-in user can watch it
+    if (req.params.videoId === 'demo') {
+      return next();
+    }
+
     const db = getDb();
+
     const accessDoc = await db.collection('courseAccess').doc(req.user.uid).get();
 
     if (!accessDoc.exists) {

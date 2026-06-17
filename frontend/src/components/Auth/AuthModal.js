@@ -85,7 +85,7 @@ const AuthModal = () => {
           const rawName = res.data.user?.name || res.data.user?.email || '';
           const displayName = rawName.includes('@') ? rawName.split('@')[0] : (rawName.split(' ')[0] || 'there');
           toast.success(`Login approved! Welcome back, ${displayName}!`);
-          loginWithToken(res.data.token, res.data.user);
+          loginWithToken(res.data.token, res.data.firebaseToken, res.data.user);
           if (res.data.user?.role === 'admin') {
             navigate('/admin');
           }

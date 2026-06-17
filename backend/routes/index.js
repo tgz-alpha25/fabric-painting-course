@@ -27,6 +27,7 @@ router.post('/auth/logout', verifyToken, authController.logout);
 router.post('/auth/approve-device', authController.approveDevice);
 router.get('/auth/check-approval', authController.checkApproval);
 router.get('/auth/profile', verifyToken, authController.getProfile);
+router.get('/auth/firebase-token', verifyToken, authController.getFirebaseToken);
 
 // VIDEO ROUTES (requires login + course access)
 router.get('/videos', verifyToken, verifyCourseAccess, videoController.getVideoList);

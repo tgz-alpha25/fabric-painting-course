@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import api from '../utils/api';
+import toast from 'react-hot-toast';
 import {
   FaPlay, FaPalette, FaLeaf, FaStar, FaWhatsapp, FaCheck,
   FaBrush, FaGraduationCap, FaCertificate, FaUsers, FaLock
@@ -24,19 +26,31 @@ const TESTIMONIALS = [
 const Landing = () => {
   const { user, openAuth } = useAuth();
   const [videoModalOpen, setVideoModalOpen] = useState(false);
+  const [streamUrl, setStreamUrl] = useState(null);
+  const [videoLoading, setVideoLoading] = useState(false);
 
-  const handleDemoVideo = () => {
+  const handleDemoVideo = async () => {
     if (!user) {
       openAuth('login');
     } else {
       setVideoModalOpen(true);
+      setVideoLoading(true);
+      try {
+        const res = await api.get('/videos/demo/stream');
+        setStreamUrl(res.data.streamUrl);
+      } catch (err) {
+        console.error('Failed to get demo stream url:', err);
+        toast.error('Failed to load demo video');
+        setVideoModalOpen(false);
+      } finally {
+        setVideoLoading(false);
+      }
     }
   };
 
-  const getDemoVideoUrl = () => {
-    const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
-    const baseUrl = apiUrl.replace(/\/api$/, '');
-    return `${baseUrl}/videos/demo.mp4`;
+  const closeVideoModal = () => {
+    setVideoModalOpen(false);
+    setStreamUrl(null);
   };
 
   return (
@@ -207,14 +221,21 @@ const Landing = () => {
 
       {/* Demo Video Modal */}
       {videoModalOpen && (
-        <div className="video-modal-overlay" onClick={() => setVideoModalOpen(false)}>
+        <div className="video-modal-overlay" onClick={closeVideoModal}>
           <div className="video-modal-box" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close-btn" onClick={() => setVideoModalOpen(false)}>✕</button>
-            <video controls controlsList="nodownload" onContextMenu={(e) => e.preventDefault()}
-              style={{ width: '100%', borderRadius: 8 }}>
-              <source src={getDemoVideoUrl()} type="video/mp4" />
-              Your browser does not support the video tag.
-            </video>
+            <button className="modal-close-btn" onClick={closeVideoModal}>✕</button>
+            {videoLoading ? (
+              <div className="video-loading" style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text)' }}>
+                <span className="spinner" style={{ width: 40, height: 40, borderWidth: 3, borderColor: 'var(--primary)', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+              </div>
+            ) : (
+              streamUrl && (
+                <video controls playsInline style={{ width: '100%', borderRadius: 8 }}>
+                  <source src={streamUrl} type="video/mp4" />
+                  Your browser does not support the video tag.
+                </video>
+              )
+            )}
           </div>
         </div>
       )}

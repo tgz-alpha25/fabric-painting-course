@@ -32,18 +32,20 @@ exports.getVideoList = async (req, res) => {
     let videos = COURSE_VIDEOS;
 
     if (!videosSnapshot.empty) {
-      videos = videosSnapshot.docs.map((doc) => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          classNumber: data.classNumber,
-          title: data.title,
-          description: data.description,
-          thumbnail: data.thumbnail || null,
-          duration: data.duration || 0,
-          hasPublicId: !!(data.cloudinaryPublicIds && Object.keys(data.cloudinaryPublicIds).length),
-        };
-      });
+      videos = videosSnapshot.docs
+        .filter((doc) => doc.id !== 'demo')
+        .map((doc) => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            classNumber: data.classNumber,
+            title: data.title,
+            description: data.description,
+            thumbnail: data.thumbnail || null,
+            duration: data.duration || 0,
+            hasPublicId: !!(data.cloudinaryPublicIds && Object.keys(data.cloudinaryPublicIds).length),
+          };
+        });
     }
 
     res.json({ videos });
@@ -84,31 +86,33 @@ exports.getVideoStream = async (req, res) => {
     // Generate secure signed HLS URL
     const streamUrl = await generateSecureVideoUrl(publicId, config);
 
-    // Track watch history
-    const historyRef = db
-      .collection('watchHistory')
-      .doc(req.user.uid)
-      .collection('videos')
-      .doc(videoId);
+    // Track watch history — skip for demo video
+    if (videoId !== 'demo') {
+      const historyRef = db
+        .collection('watchHistory')
+        .doc(req.user.uid)
+        .collection('videos')
+        .doc(videoId);
 
-    const historyDoc = await historyRef.get();
+      const historyDoc = await historyRef.get();
 
-    if (historyDoc.exists) {
-      await historyRef.update({
-        watchCount: (historyDoc.data().watchCount || 0) + 1,
-        lastWatched: new Date(),
-        title: videoData.title,
-      });
-    } else {
-      await historyRef.set({
-        videoId,
-        title: videoData.title,
-        watchCount: 1,
-        totalWatchTime: 0,
-        lastWatched: new Date(),
-        firstWatched: new Date(),
-        progress: 0,
-      });
+      if (historyDoc.exists) {
+        await historyRef.update({
+          watchCount: (historyDoc.data().watchCount || 0) + 1,
+          lastWatched: new Date(),
+          title: videoData.title,
+        });
+      } else {
+        await historyRef.set({
+          videoId,
+          title: videoData.title,
+          watchCount: 1,
+          totalWatchTime: 0,
+          lastWatched: new Date(),
+          firstWatched: new Date(),
+          progress: 0,
+        });
+      }
     }
 
     res.json({

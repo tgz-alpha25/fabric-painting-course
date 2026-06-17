@@ -23,6 +23,14 @@ api.interceptors.response.use(
     ) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
+      localStorage.removeItem('firebaseToken');
+      try {
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: 'token',
+          newValue: null,
+          storageArea: localStorage
+        }));
+      } catch (e) {}
       if (window.location.pathname !== '/') {
         window.location.href = '/';
       }

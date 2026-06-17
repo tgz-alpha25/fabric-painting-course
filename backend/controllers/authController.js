@@ -126,11 +126,12 @@ exports.register = async (req, res) => {
     // Delete the verified OTP
     await otpDoc.ref.delete();
 
-    // Create Firebase Auth user (no phoneNumber - we use email OTP verification)
+    // Create Firebase Auth user (email is verified via OTP above)
     const userRecord = await authClient.createUser({
       email,
       password,
       displayName: name,
+      emailVerified: true,
     });
 
     // Save to Firestore
@@ -258,17 +259,9 @@ exports.login = async (req, res) => {
 
     const isVerificationRequired = loginScenario !== null;
 
-    if (isNewDevice && deviceIds.length >= (userData.deviceLimit || 3)) {
-      return res.status(403).json({
-        error: `Device limit reached (${userData.deviceLimit || 3} devices). Contact admin to remove a device.`,
-        code: 'DEVICE_LIMIT_REACHED',
-        devices: deviceIds.map((id) => ({
-          id,
-          info: `${devices[id].browser} on ${devices[id].os}`,
-          lastLogin: devices[id].lastLogin,
-        })),
-      });
-    }
+    // Note: If this is a new device and the user has reached their limit,
+    // we still send the approval email. The oldest device will be evicted
+    // automatically upon approval (self-healing device rotation).
 
     const assignedDeviceId = clientDeviceId || existingDeviceId || uuidv4();
     const sessionToken = uuidv4();
@@ -379,6 +372,15 @@ exports.login = async (req, res) => {
 
     const token = generateToken(uid, sessionToken, role);
 
+    // Generate a Firebase custom token so the client SDK can sign in
+    // and read Firestore directly (e.g. real-time session listener)
+    let firebaseToken = null;
+    try {
+      firebaseToken = await getAuth().createCustomToken(uid);
+    } catch (e) {
+      console.warn('Could not generate Firebase custom token:', e.message);
+    }
+
     // Log attempt
     await db.collection('loginAttempts').add({
       email,
@@ -390,6 +392,7 @@ exports.login = async (req, res) => {
 
     res.json({
       token,
+      firebaseToken,
       user: {
         uid,
         name: userData.name,
@@ -535,12 +538,21 @@ exports.checkApproval = async (req, res) => {
       // Generate JWT Token for the waiting device
       const jwtToken = generateToken(requestData.userId, requestData.sessionToken, role);
 
+      // Also generate a Firebase custom token so the client SDK can sign in
+      let firebaseToken = null;
+      try {
+        firebaseToken = await getAuth().createCustomToken(requestData.userId);
+      } catch (e) {
+        console.warn('Could not generate Firebase custom token:', e.message);
+      }
+
       // Clean up/delete the request so it can't be claimed again
       await requestDoc.ref.delete();
 
       return res.json({
         approved: true,
         token: jwtToken,
+        firebaseToken,
         user: {
           uid: requestData.userId,
           name: userData.name,
@@ -582,3 +594,17 @@ exports.getProfile = async (req, res) => {
     res.status(500).json({ error: 'Failed to get profile' });
   }
 };
+
+// GET FIREBASE CUSTOM TOKEN — used by the frontend to sign in to the Firebase Client SDK.
+// The Client SDK needs to be authenticated to read Firestore in real-time (session listener).
+// This token only lasts 1 hour, so the frontend calls this endpoint to refresh it when needed.
+exports.getFirebaseToken = async (req, res) => {
+  try {
+    const firebaseToken = await getAuth().createCustomToken(req.user.uid);
+    res.json({ firebaseToken });
+  } catch (err) {
+    console.error('Get firebase token error:', err);
+    res.status(500).json({ error: 'Failed to generate Firebase token' });
+  }
+};
+

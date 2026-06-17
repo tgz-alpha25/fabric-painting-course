@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import api from '../utils/api';
-import { db } from '../config/firebase';
+import { db, auth as firebaseClientAuth } from '../config/firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
+import { signInWithCustomToken, signOut } from 'firebase/auth';
 import toast from 'react-hot-toast';
 
 const AuthContext = createContext(null);
@@ -14,6 +15,26 @@ const parseJwt = (token) => {
   }
 };
 
+const syncFirebaseAuth = async (firebaseToken) => {
+  try {
+    await signInWithCustomToken(firebaseClientAuth, firebaseToken);
+  } catch (err) {
+    if (err.code === 'auth/invalid-custom-token' || err.code === 'auth/argument-error') {
+      console.warn('Firebase custom token invalid/expired, fetching fresh one...');
+      try {
+        const res = await api.get('/auth/firebase-token');
+        const freshToken = res.data.firebaseToken;
+        localStorage.setItem('firebaseToken', freshToken);
+        await signInWithCustomToken(firebaseClientAuth, freshToken);
+      } catch (tokenErr) {
+        console.error('Failed to refresh Firebase token:', tokenErr.message);
+      }
+    } else {
+      console.warn('Firebase sign-in error (non-blocking):', err.message);
+    }
+  }
+};
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -23,16 +44,35 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
     const token = localStorage.getItem('token');
-    if (storedUser && storedUser !== 'undefined' && token) {
-      try {
-        setUser(JSON.parse(storedUser));
-      } catch (e) {
-        console.error('Error parsing stored user:', e);
-        localStorage.removeItem('user');
-        localStorage.removeItem('token');
+    const firebaseToken = localStorage.getItem('firebaseToken');
+
+    const initAuth = async () => {
+      if (storedUser && storedUser !== 'undefined' && token) {
+        try {
+          setUser(JSON.parse(storedUser));
+          if (firebaseToken) {
+            await syncFirebaseAuth(firebaseToken);
+          } else {
+            try {
+              const res = await api.get('/auth/firebase-token');
+              const freshToken = res.data.firebaseToken;
+              localStorage.setItem('firebaseToken', freshToken);
+              await signInWithCustomToken(firebaseClientAuth, freshToken);
+            } catch (e) {
+              console.warn('Could not fetch Firebase token on init:', e.message);
+            }
+          }
+        } catch (e) {
+          console.error('Error parsing stored user:', e);
+          localStorage.removeItem('user');
+          localStorage.removeItem('token');
+          localStorage.removeItem('firebaseToken');
+        }
       }
-    }
-    setLoading(false);
+      setLoading(false);
+    };
+
+    initAuth();
   }, []);
 
   // Sync authentication across multiple browser tabs
@@ -78,9 +118,20 @@ export const AuthProvider = ({ children }) => {
         if (!currentSession || currentSession.sessionToken !== mySessionToken) {
           localStorage.removeItem('token');
           localStorage.removeItem('user');
+          localStorage.removeItem('firebaseToken');
           setUser(null);
+          signOut(firebaseClientAuth).catch(() => {});
           toast.error('Session expired. Another device logged in.', { id: 'session-conflict-toast' });
           
+          // Force a storage event update locally so other tabs are notified
+          try {
+            window.dispatchEvent(new StorageEvent('storage', {
+              key: 'token',
+              newValue: null,
+              storageArea: localStorage
+            }));
+          } catch (e) {}
+
           // Redirect to home if they are on a protected route
           if (window.location.pathname !== '/') {
             window.location.href = '/';
@@ -102,13 +153,17 @@ export const AuthProvider = ({ children }) => {
       if (decoded && decoded.exp * 1000 < Date.now()) {
         localStorage.removeItem('token');
         localStorage.removeItem('user');
+        localStorage.removeItem('firebaseToken');
         setUser(null);
+        signOut(firebaseClientAuth).catch(() => {});
       } else if (decoded) {
         const timeUntilExpiry = decoded.exp * 1000 - Date.now();
         const timeoutId = setTimeout(() => {
           localStorage.removeItem('token');
           localStorage.removeItem('user');
+          localStorage.removeItem('firebaseToken');
           setUser(null);
+          signOut(firebaseClientAuth).catch(() => {});
           // Force a storage event update locally so other tabs are notified
           try {
             window.dispatchEvent(new StorageEvent('storage', {
@@ -140,16 +195,24 @@ export const AuthProvider = ({ children }) => {
       err.response = res;
       throw err;
     }
-    const { token, user: userData } = res.data;
+    const { token, firebaseToken, user: userData } = res.data;
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(userData));
+    if (firebaseToken) {
+      localStorage.setItem('firebaseToken', firebaseToken);
+      await syncFirebaseAuth(firebaseToken);
+    }
     setUser(userData);
     return res.data;
   };
 
-  const loginWithToken = (token, userData) => {
+  const loginWithToken = async (token, firebaseToken, userData) => {
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(userData));
+    if (firebaseToken) {
+      localStorage.setItem('firebaseToken', firebaseToken);
+      await syncFirebaseAuth(firebaseToken);
+    }
     setUser(userData);
   };
 
@@ -164,6 +227,10 @@ export const AuthProvider = ({ children }) => {
     } catch (e) {}
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    localStorage.removeItem('firebaseToken');
+    try {
+      await signOut(firebaseClientAuth);
+    } catch (e) {}
     setUser(null);
   };
 
