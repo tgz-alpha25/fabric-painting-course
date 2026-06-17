@@ -207,80 +207,140 @@ export const AuthProvider = ({ children }) => {
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
-  // ── 5. Firestore real-time session listener (server-side forced logout) ──
+  // ── 5. Firestore real-time session listener + polling fallback ──────────
+  //
+  // Strategy A: Firestore onSnapshot (instant, real-time)
+  //   - Requires Firebase Client Auth to be signed in.
+  //   - We attempt to sign in with the stored Firebase custom token first;
+  //     if the token is stale we refresh it from the backend.
+  //   - If Firebase Auth cannot be established, we rely on Strategy B.
+  //
+  // Strategy B: Backend polling every 30 s (reliable fallback)
+  //   - Calls /auth/profile which validates the JWT session server-side.
+  //   - The backend returns SESSION_CONFLICT when currentSession no longer
+  //     matches, which triggers an immediate local logout.
+  //   - This works regardless of Firebase client auth state.
+  //
+  // Both strategies are active simultaneously. Whichever detects the session
+  // invalidation first wins — the other simply becomes a no-op afterwards.
   useEffect(() => {
     if (!user) return;
 
-    // Wait until Firebase Auth is synchronized for this user before subscribing to Firestore
-    const unsubscribeAuth = firebaseClientAuth.onAuthStateChanged((firebaseUser) => {
-      if (!firebaseUser || firebaseUser.uid !== user.uid) {
-        // Not signed in to Firebase yet, or signed in as a different user
-        return;
+    const token = localStorage.getItem('token');
+    if (!token) return;
+
+    const decoded = parseJwt(token);
+    const mySessionToken = decoded?.sessionToken;
+    if (!mySessionToken) return;
+
+    let isMounted = true;
+
+    // Shared forced-logout handler so both strategies call the same path
+    const forceLogout = (reason = 'Session expired — another device logged in.') => {
+      if (!isMounted) return;
+      clearAuthStorage();
+      setUser(null);
+      signOut(firebaseClientAuth).catch(() => {});
+      broadcast(MSG.SESSION_EXPIRED);
+      toast.error(reason, { id: 'session-conflict-toast' });
+      if (window.location.pathname !== '/') {
+        window.location.href = '/';
       }
+    };
 
-      const token = localStorage.getItem('token');
-      if (!token) return;
+    // ── Strategy A: Firestore onSnapshot ──────────────────────────────────
+    let unsubSnapshot = null;
 
-      const decoded = parseJwt(token);
-      const mySessionToken = decoded?.sessionToken;
-      if (!mySessionToken) return;
-
-      // Clean up any existing snapshot subscription before creating a new one
-      if (activeUnsubSnapshot.current) {
-        activeUnsubSnapshot.current();
-        activeUnsubSnapshot.current = null;
-      }
-
-      const unsubSnapshot = onSnapshot(
+    const setupFirestoreListener = () => {
+      if (unsubSnapshot) return; // already subscribed
+      unsubSnapshot = onSnapshot(
         doc(db, 'users', user.uid),
         (docSnap) => {
-          if (!docSnap.exists()) return;
+          if (!docSnap.exists() || !isMounted) return;
           const data = docSnap.data();
           const currentSession = data.currentSession;
 
           if (!currentSession || currentSession.sessionToken !== mySessionToken) {
-            clearAuthStorage();
-            setUser(null);
-            signOut(firebaseClientAuth).catch(() => {});
-
-            // Tell all other tabs to also log out
-            broadcast(MSG.SESSION_EXPIRED);
-
-            toast.error('Session expired — another device logged in.', {
-              id: 'session-conflict-toast',
-            });
-
-            if (window.location.pathname !== '/') {
-              window.location.href = '/';
-            }
-          } else if (data.sessionInvalidatedAt && mySessionToken && data.currentSession?.loginAt) {
-            const invalidatedAt = data.sessionInvalidatedAt.toDate ? data.sessionInvalidatedAt.toDate() : new Date(data.sessionInvalidatedAt);
-            const loginAt = data.currentSession.loginAt.toDate ? data.currentSession.loginAt.toDate() : new Date(data.currentSession.loginAt);
+            forceLogout('Session expired — another device logged in.');
+          } else if (data.sessionInvalidatedAt && data.currentSession?.loginAt) {
+            const invalidatedAt = data.sessionInvalidatedAt.toDate
+              ? data.sessionInvalidatedAt.toDate()
+              : new Date(data.sessionInvalidatedAt);
+            const loginAt = data.currentSession.loginAt.toDate
+              ? data.currentSession.loginAt.toDate()
+              : new Date(data.currentSession.loginAt);
             if (invalidatedAt > loginAt) {
-              clearAuthStorage();
-              setUser(null);
-              signOut(firebaseClientAuth).catch(() => {});
-              broadcast(MSG.SESSION_EXPIRED);
-              toast.error('Session invalidated by newer login.', { id: 'session-invalidated-toast' });
-              if (window.location.pathname !== '/') {
-                window.location.href = '/';
-              }
+              forceLogout('Session invalidated by newer login.');
             }
           }
         },
-        (error) => console.error('Firestore user snapshot error:', error)
+        (error) => {
+          console.warn('Firestore snapshot error (will rely on polling):', error.message);
+          // Don't rethrow — Strategy B will cover us
+        }
       );
+    };
 
-      activeUnsubSnapshot.current = unsubSnapshot;
+    // Attempt to sign in to Firebase Client Auth so Firestore rules pass
+    const initFirestoreListener = async () => {
+      try {
+        const storedFirebaseToken = localStorage.getItem('firebaseToken');
+        if (storedFirebaseToken) {
+          await syncFirebaseAuth(storedFirebaseToken);
+        } else {
+          const res = await api.get('/auth/firebase-token');
+          const freshToken = res.data.firebaseToken;
+          localStorage.setItem('firebaseToken', freshToken);
+          await syncFirebaseAuth(freshToken);
+        }
+        if (isMounted) setupFirestoreListener();
+      } catch (err) {
+        console.warn('Could not init Firebase auth for snapshot listener, using polling only:', err.message);
+      }
+    };
+
+    initFirestoreListener();
+
+    // Also listen for Firebase Auth state changes (handles token refresh mid-session)
+    const unsubscribeAuth = firebaseClientAuth.onAuthStateChanged((firebaseUser) => {
+      if (!isMounted) return;
+      if (firebaseUser && firebaseUser.uid === user.uid) {
+        setupFirestoreListener();
+      }
     });
 
-    const activeUnsubSnapshot = { current: null };
+    // ── Strategy B: Backend polling fallback every 30 s ──────────────────
+    const pollSession = async () => {
+      if (!isMounted) return;
+      const currentToken = localStorage.getItem('token');
+      if (!currentToken) return;
+      try {
+        await api.get('/auth/profile');
+        // 200 = session still valid, do nothing
+      } catch (err) {
+        if (!isMounted) return;
+        const code = err.response?.data?.code;
+        const status = err.response?.status;
+        if (status === 401 && (code === 'SESSION_CONFLICT' || code === 'TOKEN_EXPIRED')) {
+          forceLogout(
+            code === 'SESSION_CONFLICT'
+              ? 'Session expired — another device logged in.'
+              : 'Your session expired. Please log in again.'
+          );
+        }
+        // Other errors (network, 5xx) are transient — keep polling
+      }
+    };
+
+    const pollIntervalId = setInterval(pollSession, 30000);
+    // Run once immediately to catch a session change that happened while offline
+    pollSession();
 
     return () => {
+      isMounted = false;
       unsubscribeAuth();
-      if (activeUnsubSnapshot.current) {
-        activeUnsubSnapshot.current();
-      }
+      if (unsubSnapshot) unsubSnapshot();
+      clearInterval(pollIntervalId);
     };
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
