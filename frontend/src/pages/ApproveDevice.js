@@ -1,11 +1,13 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../utils/api';
+import toast from 'react-hot-toast';
 import { FaCheck, FaTimes, FaSpinner } from 'react-icons/fa';
 
 const ApproveDevice = () => {
   const [params] = useSearchParams();
   const [status, setStatus] = useState('loading'); // loading | approved | denied | error
+  const [errorMsg, setErrorMsg] = useState('');
   const apiCalled = useRef(false);
 
   useEffect(() => {
@@ -18,6 +20,8 @@ const ApproveDevice = () => {
 
     if (!token || !requestId) {
       setStatus('error');
+      setErrorMsg('Invalid link — missing token or request ID.');
+      toast.error('Invalid approval link.', { id: 'approve-result', duration: 6000 });
       return;
     }
 
@@ -25,11 +29,25 @@ const ApproveDevice = () => {
       .then(() => {
         if (allow === 'true') {
           setStatus('approved');
+          toast.success('✅ Device approved! The new device is now logged in.', {
+            id: 'approve-result',
+            duration: 6000,
+          });
         } else {
           setStatus('denied');
+          toast('🚫 Login denied. Your current session remains active.', {
+            id: 'approve-result',
+            icon: '🔒',
+            duration: 6000,
+          });
         }
       })
-      .catch(() => setStatus('error'));
+      .catch((err) => {
+        const msg = err.response?.data?.error || 'This approval link has expired or is invalid.';
+        setStatus('error');
+        setErrorMsg(msg);
+        toast.error(msg, { id: 'approve-result', duration: 7000 });
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -81,7 +99,7 @@ const ApproveDevice = () => {
             </div>
             <h2 style={{ fontFamily: 'var(--font-display)', color: 'var(--error)' }}>Invalid or Expired Link</h2>
             <p style={{ color: 'var(--text-muted)', marginTop: 8 }}>
-              This approval link has expired or is invalid. Please try logging in again.
+              {errorMsg || 'This approval link has expired or is invalid. Please try logging in again.'}
             </p>
           </>
         )}

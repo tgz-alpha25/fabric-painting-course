@@ -109,24 +109,28 @@ export const AuthProvider = ({ children }) => {
           break;
 
         case MSG.SESSION_EXPIRED:
+          clearAuthStorage();
           setUser(null);
           signOut(firebaseClientAuth).catch(() => {});
           toast.error('Logged out — another device signed in.', {
             id: 'session-expired-cross-tab',
+            duration: 5000,
           });
-          if (window.location.pathname !== '/') {
+          if (['/course', '/admin'].some(p => window.location.pathname.startsWith(p))) {
             window.location.href = '/';
           }
           break;
 
         case MSG.TOKEN_EXPIRED:
+          clearAuthStorage();
           setUser(null);
           signOut(firebaseClientAuth).catch(() => {});
           toast('Your session expired. Please log in again.', {
             id: 'token-expired-cross-tab',
             icon: '⏰',
+            duration: 5000,
           });
-          if (window.location.pathname !== '/') {
+          if (['/course', '/admin'].some(p => window.location.pathname.startsWith(p))) {
             window.location.href = '/';
           }
           break;
@@ -238,12 +242,15 @@ export const AuthProvider = ({ children }) => {
     // Shared forced-logout handler so both strategies call the same path
     const forceLogout = (reason = 'Session expired — another device logged in.') => {
       if (!isMounted) return;
+      isMounted = false; // prevent double-trigger
       clearAuthStorage();
-      setUser(null);
+      setUser(null);                                    // instant React re-render
       signOut(firebaseClientAuth).catch(() => {});
       broadcast(MSG.SESSION_EXPIRED);
-      toast.error(reason, { id: 'session-conflict-toast' });
-      if (window.location.pathname !== '/') {
+      toast.error(reason, { id: 'session-conflict-toast', duration: 5000 });
+      // Redirect away from protected pages; on '/' setUser(null) already updates the UI
+      const protectedPaths = ['/course', '/admin'];
+      if (protectedPaths.some(p => window.location.pathname.startsWith(p))) {
         window.location.href = '/';
       }
     };
