@@ -302,8 +302,9 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     const deviceId = getOrCreateDeviceId();
     const res = await api.post('/auth/login', { email, password, deviceId });
-    if (res.status === 202) {
-      const err = new Error(res.data.message || 'Device approval required');
+    // If backend indicates device approval is required (status 202) or an error code, treat as error
+    if (res.status !== 200) {
+      const err = new Error(res.data?.message || 'Login error');
       err.response = res;
       throw err;
     }

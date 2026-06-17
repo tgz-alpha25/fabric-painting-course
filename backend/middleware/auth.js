@@ -24,15 +24,24 @@ const verifyToken = async (req, res, next) => {
       return res.status(401).json({ error: 'Account is inactive' });
     }
 
-    // Check session token matches (single device session)
-    if (
-      userData.currentSession &&
-      userData.currentSession.sessionToken !== decoded.sessionToken
-    ) {
+    // Check session token matches (single device session) and ensure the session hasn't been invalidated
+    if (userData.currentSession && userData.currentSession.sessionToken !== decoded.sessionToken) {
       return res.status(401).json({
         error: 'Session expired. Another device logged in.',
         code: 'SESSION_CONFLICT',
       });
+    }
+
+    // Additional safeguard: if a session invalidation timestamp exists and the token was issued before it, reject
+    if (userData.sessionInvalidatedAt) {
+      const invalidatedAt = userData.sessionInvalidatedAt.toDate ? userData.sessionInvalidatedAt.toDate() : new Date(userData.sessionInvalidatedAt);
+      // decoded.iat is seconds since epoch
+      if (decoded.iat * 1000 < invalidatedAt.getTime()) {
+        return res.status(401).json({
+          error: 'Session invalidated due to login on another device.',
+          code: 'SESSION_CONFLICT',
+        });
+      }
     }
 
     // Check if the current session's device was deleted/removed by admin

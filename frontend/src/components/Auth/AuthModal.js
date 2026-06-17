@@ -37,6 +37,7 @@ const AuthModal = () => {
 
   const handleLogin = async (e) => {
     e.preventDefault();
+    toast.dismiss(); // clear any existing toasts
     setLoading(true);
     try {
       const result = await login(loginData.email, loginData.password);
@@ -57,6 +58,7 @@ const AuthModal = () => {
         setRequestId(reqId);
         setApprovalMessage(approvalMsg);
         setStep(3);
+toast.dismiss();
         toast(approvalMsg, { icon: '📧', duration: 6000 });
       } else if (code === 'DEVICE_LIMIT_REACHED') {
         toast.error('Device limit reached. Contact admin to remove an old device.');
@@ -84,6 +86,7 @@ const AuthModal = () => {
           clearInterval(intervalId);
           const rawName = res.data.user?.name || res.data.user?.email || '';
           const displayName = rawName.includes('@') ? rawName.split('@')[0] : (rawName.split(' ')[0] || 'there');
+          toast.dismiss();
           toast.success(`Login approved! Welcome back, ${displayName}!`);
           loginWithToken(res.data.token, res.data.firebaseToken, res.data.user);
           if (res.data.user?.role === 'admin') {
