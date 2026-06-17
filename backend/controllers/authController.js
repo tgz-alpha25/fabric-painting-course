@@ -1,4 +1,5 @@
 const { getDb, getAuth } = require('../config/firebase');
+const admin = require('firebase-admin');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const UAParser = require('ua-parser-js');
@@ -479,6 +480,8 @@ exports.approveDevice = async (req, res) => {
     // For admin_login and session_conflict the device is already trusted (or becomes so); just update lastLogin
     devices[newDeviceId] = { ...requestData.newDeviceInfo, lastLogin: new Date() };
 
+    // Allow: update user session and device
+    const prevSession = userData.currentSession;
     await userDoc.ref.update({
       role,
       devices,
@@ -487,6 +490,8 @@ exports.approveDevice = async (req, res) => {
         sessionToken: requestData.sessionToken,
         loginAt: new Date(),
       },
+      // Mark the previous session as invalidated so other tabs can log out
+      sessionInvalidatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
     await requestDoc.ref.update({ status: 'approved' });

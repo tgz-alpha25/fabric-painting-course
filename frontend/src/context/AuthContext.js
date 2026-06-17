@@ -228,6 +228,19 @@ export const AuthProvider = ({ children }) => {
           if (window.location.pathname !== '/') {
             window.location.href = '/';
           }
+        } else if (data.sessionInvalidatedAt && mySessionToken && data.currentSession?.loginAt) {
+          const invalidatedAt = data.sessionInvalidatedAt.toDate ? data.sessionInvalidatedAt.toDate() : new Date(data.sessionInvalidatedAt);
+          const loginAt = data.currentSession.loginAt.toDate ? data.currentSession.loginAt.toDate() : new Date(data.currentSession.loginAt);
+          if (invalidatedAt > loginAt) {
+            clearAuthStorage();
+            setUser(null);
+            signOut(firebaseClientAuth).catch(() => {});
+            broadcast(MSG.SESSION_EXPIRED);
+            toast.error('Session invalidated by newer login.', { id: 'session-invalidated-toast' });
+            if (window.location.pathname !== '/') {
+              window.location.href = '/';
+            }
+          }
         }
       },
       (error) => console.error('Firestore user snapshot error:', error)
