@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import api from '../utils/api';
 import { db, auth as firebaseClientAuth } from '../config/firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
@@ -7,6 +7,22 @@ import toast from 'react-hot-toast';
 
 const AuthContext = createContext(null);
 
+// ─── Cross-tab messaging channel ───────────────────────────────────────────
+// BroadcastChannel is supported in all modern browsers (Chrome, Firefox,
+// Safari 15.4+). We use it to push auth state changes to sibling tabs
+// instantly without relying on the storage event (which only fires in OTHER
+// tabs, not the one that made the change).
+const AUTH_CHANNEL = 'fabric_auth_sync';
+
+// Message types
+const MSG = {
+  LOGGED_IN:       'LOGGED_IN',       // a tab just logged in
+  LOGGED_OUT:      'LOGGED_OUT',      // a tab just logged out (voluntary or forced)
+  SESSION_EXPIRED: 'SESSION_EXPIRED', // session killed by another device
+  TOKEN_EXPIRED:   'TOKEN_EXPIRED',   // JWT expired naturally
+};
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
 const parseJwt = (token) => {
   try {
     return JSON.parse(atob(token.split('.')[1]));
@@ -35,38 +51,120 @@ const syncFirebaseAuth = async (firebaseToken) => {
   }
 };
 
-export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
+const clearAuthStorage = () => {
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  localStorage.removeItem('firebaseToken');
+};
 
+// ─── Provider ───────────────────────────────────────────────────────────────
+export const AuthProvider = ({ children }) => {
+  const [user, setUser]                   = useState(null);
+  const [loading, setLoading]             = useState(true);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode]           = useState('login');
+
+  // Keep a stable ref to the BroadcastChannel so we can post to it from
+  // inside callbacks without stale-closure issues.
+  const channelRef = useRef(null);
+
+  // ── 1. Open BroadcastChannel once on mount ──────────────────────────────
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    const token = localStorage.getItem('token');
+    if (typeof BroadcastChannel !== 'undefined') {
+      channelRef.current = new BroadcastChannel(AUTH_CHANNEL);
+    }
+    return () => {
+      channelRef.current?.close();
+    };
+  }, []);
+
+  // ── 2. Listen for messages from other tabs ──────────────────────────────
+  useEffect(() => {
+    if (!channelRef.current) return;
+
+    const handleMessage = (event) => {
+      const { type, userData } = event.data || {};
+
+      switch (type) {
+        case MSG.LOGGED_IN:
+          // Another tab logged in — restore their session here too
+          if (userData) {
+            const storedToken = localStorage.getItem('token');
+            const storedUser  = localStorage.getItem('user');
+            if (storedToken && storedUser) {
+              try { setUser(JSON.parse(storedUser)); } catch (e) { /* ignore */ }
+            }
+          }
+          break;
+
+        case MSG.LOGGED_OUT:
+          setUser(null);
+          signOut(firebaseClientAuth).catch(() => {});
+          break;
+
+        case MSG.SESSION_EXPIRED:
+          setUser(null);
+          signOut(firebaseClientAuth).catch(() => {});
+          toast.error('Logged out — another device signed in.', {
+            id: 'session-expired-cross-tab',
+          });
+          if (window.location.pathname !== '/') {
+            window.location.href = '/';
+          }
+          break;
+
+        case MSG.TOKEN_EXPIRED:
+          setUser(null);
+          signOut(firebaseClientAuth).catch(() => {});
+          toast('Your session expired. Please log in again.', {
+            id: 'token-expired-cross-tab',
+            icon: '⏰',
+          });
+          if (window.location.pathname !== '/') {
+            window.location.href = '/';
+          }
+          break;
+
+        default:
+          break;
+      }
+    };
+
+    channelRef.current.addEventListener('message', handleMessage);
+    return () => channelRef.current?.removeEventListener('message', handleMessage);
+  }, []);
+
+  // Helper to broadcast to sibling tabs
+  const broadcast = (type, extra = {}) => {
+    channelRef.current?.postMessage({ type, ...extra });
+  };
+
+  // ── 3. Restore session on initial load ──────────────────────────────────
+  useEffect(() => {
+    const storedUser    = localStorage.getItem('user');
+    const token         = localStorage.getItem('token');
     const firebaseToken = localStorage.getItem('firebaseToken');
 
     const initAuth = async () => {
       if (storedUser && storedUser !== 'undefined' && token) {
         try {
           setUser(JSON.parse(storedUser));
+
+          // Try to authenticate with Firebase Client SDK
           if (firebaseToken) {
             await syncFirebaseAuth(firebaseToken);
           } else {
             try {
               const res = await api.get('/auth/firebase-token');
-              const freshToken = res.data.firebaseToken;
-              localStorage.setItem('firebaseToken', freshToken);
-              await signInWithCustomToken(firebaseClientAuth, freshToken);
+              localStorage.setItem('firebaseToken', res.data.firebaseToken);
+              await signInWithCustomToken(firebaseClientAuth, res.data.firebaseToken);
             } catch (e) {
               console.warn('Could not fetch Firebase token on init:', e.message);
             }
           }
         } catch (e) {
-          console.error('Error parsing stored user:', e);
-          localStorage.removeItem('user');
-          localStorage.removeItem('token');
-          localStorage.removeItem('firebaseToken');
+          console.error('Error restoring session:', e);
+          clearAuthStorage();
         }
       }
       setLoading(false);
@@ -75,20 +173,20 @@ export const AuthProvider = ({ children }) => {
     initAuth();
   }, []);
 
-  // Sync authentication across multiple browser tabs
+  // ── 4. Fallback: native storage event (for Safari < 15.4 / no BroadcastChannel)
   useEffect(() => {
     const handleStorageChange = (e) => {
+      // Only act if BroadcastChannel is NOT available (fallback path)
+      if (channelRef.current) return;
+
       if (e.key === 'token') {
         if (!e.newValue) {
           setUser(null);
+          signOut(firebaseClientAuth).catch(() => {});
         } else {
           const storedUser = localStorage.getItem('user');
           if (storedUser && storedUser !== 'undefined') {
-            try {
-              setUser(JSON.parse(storedUser));
-            } catch (e) {
-              setUser(null);
-            }
+            try { setUser(JSON.parse(storedUser)); } catch (err) { setUser(null); }
           }
         }
       }
@@ -97,7 +195,7 @@ export const AuthProvider = ({ children }) => {
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
-  // Real-time listener to detect if this session was invalidated by another login
+  // ── 5. Firestore real-time session listener (server-side forced logout) ──
   useEffect(() => {
     if (!user) return;
 
@@ -108,80 +206,81 @@ export const AuthProvider = ({ children }) => {
     const mySessionToken = decoded?.sessionToken;
     if (!mySessionToken) return;
 
-    // Listen to changes in the user's Firestore document
-    const unsub = onSnapshot(doc(db, 'users', user.uid), (docSnap) => {
-      if (docSnap.exists()) {
+    const unsub = onSnapshot(
+      doc(db, 'users', user.uid),
+      (docSnap) => {
+        if (!docSnap.exists()) return;
         const data = docSnap.data();
         const currentSession = data.currentSession;
-        
-        // If current session is null, or it has a different session token, we are logged out!
+
         if (!currentSession || currentSession.sessionToken !== mySessionToken) {
-          localStorage.removeItem('token');
-          localStorage.removeItem('user');
-          localStorage.removeItem('firebaseToken');
+          clearAuthStorage();
           setUser(null);
           signOut(firebaseClientAuth).catch(() => {});
-          toast.error('Session expired. Another device logged in.', { id: 'session-conflict-toast' });
-          
-          // Force a storage event update locally so other tabs are notified
-          try {
-            window.dispatchEvent(new StorageEvent('storage', {
-              key: 'token',
-              newValue: null,
-              storageArea: localStorage
-            }));
-          } catch (e) {}
 
-          // Redirect to home if they are on a protected route
+          // Tell all other tabs to also log out
+          broadcast(MSG.SESSION_EXPIRED);
+
+          toast.error('Session expired — another device logged in.', {
+            id: 'session-conflict-toast',
+          });
+
           if (window.location.pathname !== '/') {
             window.location.href = '/';
           }
         }
-      }
-    }, (error) => {
-      console.error('Firestore user snapshot error:', error);
-    });
+      },
+      (error) => console.error('Firestore user snapshot error:', error)
+    );
 
     return () => unsub();
-  }, [user]);
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Handle automatic JWT expiration logout
+  // ── 6. JWT expiration auto-logout ────────────────────────────────────────
   useEffect(() => {
     const token = localStorage.getItem('token');
-    if (token) {
-      const decoded = parseJwt(token);
-      if (decoded && decoded.exp * 1000 < Date.now()) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        localStorage.removeItem('firebaseToken');
-        setUser(null);
-        signOut(firebaseClientAuth).catch(() => {});
-      } else if (decoded) {
-        const timeUntilExpiry = decoded.exp * 1000 - Date.now();
-        const timeoutId = setTimeout(() => {
-          localStorage.removeItem('token');
-          localStorage.removeItem('user');
-          localStorage.removeItem('firebaseToken');
-          setUser(null);
-          signOut(firebaseClientAuth).catch(() => {});
-          // Force a storage event update locally so other tabs are notified
-          try {
-            window.dispatchEvent(new StorageEvent('storage', {
-              key: 'token',
-              newValue: null,
-              storageArea: localStorage
-            }));
-          } catch (e) {}
-        }, timeUntilExpiry);
-        return () => clearTimeout(timeoutId);
-      }
-    }
-  }, [user]);
+    if (!token) return;
 
+    const decoded = parseJwt(token);
+    if (!decoded) return;
+
+    if (decoded.exp * 1000 < Date.now()) {
+      // Already expired on mount
+      clearAuthStorage();
+      setUser(null);
+      signOut(firebaseClientAuth).catch(() => {});
+      broadcast(MSG.TOKEN_EXPIRED);
+      return;
+    }
+
+    const timeUntilExpiry = decoded.exp * 1000 - Date.now();
+    const timeoutId = setTimeout(() => {
+      clearAuthStorage();
+      setUser(null);
+      signOut(firebaseClientAuth).catch(() => {});
+
+      // Notify all tabs
+      broadcast(MSG.TOKEN_EXPIRED);
+
+      toast('Your session expired. Please log in again.', {
+        id: 'token-expired-toast',
+        icon: '⏰',
+      });
+
+      if (window.location.pathname !== '/') {
+        window.location.href = '/';
+      }
+    }, timeUntilExpiry);
+
+    return () => clearTimeout(timeoutId);
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Auth actions ─────────────────────────────────────────────────────────
   const getOrCreateDeviceId = () => {
     let devId = localStorage.getItem('deviceId');
     if (!devId) {
-      devId = 'device_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+      devId = 'device_' + Math.random().toString(36).substring(2, 15) +
+                          Math.random().toString(36).substring(2, 15);
       localStorage.setItem('deviceId', devId);
     }
     return devId;
@@ -203,6 +302,8 @@ export const AuthProvider = ({ children }) => {
       await syncFirebaseAuth(firebaseToken);
     }
     setUser(userData);
+    // Tell all other tabs this user just logged in
+    broadcast(MSG.LOGGED_IN, { userData });
     return res.data;
   };
 
@@ -214,6 +315,7 @@ export const AuthProvider = ({ children }) => {
       await syncFirebaseAuth(firebaseToken);
     }
     setUser(userData);
+    broadcast(MSG.LOGGED_IN, { userData });
   };
 
   const register = async (formData) => {
@@ -222,28 +324,25 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = async () => {
-    try {
-      await api.post('/auth/logout');
-    } catch (e) {}
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    localStorage.removeItem('firebaseToken');
-    try {
-      await signOut(firebaseClientAuth);
-    } catch (e) {}
+    try { await api.post('/auth/logout'); } catch (e) {}
+    clearAuthStorage();
+    try { await signOut(firebaseClientAuth); } catch (e) {}
     setUser(null);
+    // Tell all other tabs to log out too
+    broadcast(MSG.LOGGED_OUT);
   };
 
-  const openAuth = (mode = 'login') => {
-    setAuthMode(mode);
-    setShowAuthModal(true);
-  };
-
+  const openAuth  = (mode = 'login') => { setAuthMode(mode); setShowAuthModal(true); };
   const closeAuth = () => setShowAuthModal(false);
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, login, register, logout, loginWithToken, showAuthModal, openAuth, closeAuth, authMode, setAuthMode }}
+      value={{
+        user, loading,
+        login, register, logout, loginWithToken,
+        showAuthModal, openAuth, closeAuth,
+        authMode, setAuthMode,
+      }}
     >
       {children}
     </AuthContext.Provider>
